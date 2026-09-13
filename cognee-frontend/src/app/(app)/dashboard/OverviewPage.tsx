@@ -7,14 +7,13 @@ import { trackEvent } from "@/modules/analytics";
 import { useCogniInstance, useTenant } from "@/modules/tenant/TenantProvider";
 import { useCurrentUser } from "@/modules/users/useCurrentUser";
 import type { SessionRow } from "@/modules/sessions/getSessions";
-import { useTenantHourlyCosts } from "@/modules/billing/useTenantHourlyCosts";
 import { useFilter, useRefreshDatasetsOnMount } from "@/ui/layout/FilterContext";
 import type { PipelineRun, Range } from "@/ui/elements/AgentActivityTerminal";
 import DashboardSkeleton from "./DashboardSkeleton";
 import { useDashboardTelemetry } from "./hooks/useDashboardTelemetry";
 import { useConnectedIntegrations } from "./hooks/useConnectedIntegrations";
-import { useDataSourceStatuses } from "./hooks/useDataSourceStatuses";
-import { DATA_SOURCE_CARDS } from "@/modules/integrations/dataSourceCards";
+import { useGraphSummary } from "./hooks/useGraphSummary";
+import { useDatasetStatuses } from "@/modules/datasets/useDatasetStatuses";
 import { useCreditsBanner } from "./hooks/useCreditsBanner";
 import { useAwaitingDataset } from "./hooks/useAwaitingDataset";
 import { useOnboardingRedirect } from "./hooks/useOnboardingRedirect";
@@ -31,12 +30,9 @@ import { MemoryFlowDiagram } from "./partials/redesign/MemoryFlowDiagram";
 import type { FlowSource, FlowAgent, NodeStatus } from "./partials/redesign/MemoryFlowDiagram";
 import { CostPanel } from "./partials/redesign/CostPanel";
 import { PerformancePanel } from "./partials/redesign/PerformancePanel";
-import type { TopicScore } from "./partials/redesign/PerformancePanel";
 import { ActivityPanel } from "./partials/redesign/ActivityPanel";
 import type { DashRange } from "./partials/redesign/RangeToggle";
 import { FONT, T } from "./partials/redesign/mono";
-
-const DATA_SOURCE_PROVIDERS = DATA_SOURCE_CARDS.map((card) => card.key);
 
 interface AgentDef { name: string; logo: string; prefixes: string[] }
 
@@ -130,9 +126,11 @@ export default function OverviewPage(): React.ReactElement {
   }, [workspaceReady]);
 
   const { runs, sessions, loading } = useDashboardTelemetry(telemetryRange);
-  const { data: hourlyCosts = null } = useTenantHourlyCosts(tenant?.tenant_id ?? null, range);
   const connectedIntegrations = useConnectedIntegrations(sessions, tenant?.tenant_id ?? null);
-  const sourceStatuses = useDataSourceStatuses(DATA_SOURCE_PROVIDERS, tenant?.tenant_id ?? null);
+  // Self-hosted graph inventory + per-dataset processing state — the local
+  // replacements for the cloud data-source connectors and hourly billing.
+  const { summary: graphSummary } = useGraphSummary();
+  const { statuses: datasetStatuses } = useDatasetStatuses(workspaceReady);
   // Dashboard metrics always report workspace-wide totals — pass null so the
   // graph counts never inherit a dataset selection carried over from another page.
   const credits = useCreditsBanner();
@@ -198,31 +196,23 @@ export default function OverviewPage(): React.ReactElement {
     status: agentStatus(sessions, d.prefixes),
   }));
 
-  // Company Brain reflects whether any data has been ingested (datasets
-  // present); every other source is a live connector from DATA_SOURCE_CARDS,
-  // carrying its real control-plane connection status. Sources that aren't
-  // built yet live in the Integrations page's notify-me list, not here — the
-  // graph never advertises a source nobody can connect.
-  const flowSources: FlowSource[] = [
-    { name: "Company Brain", logo: "company-brain", status: datasets.length > 0 ? "connected" : "disconnected" },
-    ...DATA_SOURCE_CARDS.map((card) => ({
-      name: card.name,
-      // The card's glyph is optional; the graph node falls back to the key,
-      // which is the filename convention under /visuals/logos/datasources.
-      logo: card.logo ?? card.key,
-      status: sourceStatuses[card.key] ?? "disconnected",
-    })),
-  ];
+  // Sources = the workspace's own datasets (the things data actually flows
+  // in from, self-hosted): connected once cognify has completed, amber while
+  // a build is pending/processing, red when it errored. A dataset with no
+  // status row yet holds raw data waiting for its first cognify — amber.
+  const flowSources: FlowSource[] = datasets.map((d) => {
+    const s = datasetStatuses[d.id];
+    const status: NodeStatus =
+      s === "DATASET_PROCESSING_COMPLETED" ? "connected"
+      : s === "DATASET_PROCESSING_ERRORED" ? "disconnected"
+      : "reconnect";
+    return { name: d.name, logo: "dataset", status };
+  });
 
   // "Connectors" in the Get Started bar counts agents that have ever registered
   // (not just the currently-active ones), so it reflects lifetime connections.
   const connectedAgentCount = [...PERSISTENT_AGENT_DEFS, ...DYNAMIC_AGENT_DEFS]
     .filter((d) => hasRegistered(sessions, d.prefixes)).length;
-
-  // Memory Coverage is a Cognee Cloud feature (see PerformancePanel) — no
-  // local score to compute, so the panel gets an empty state directly.
-  const recallPct: number | null = null;
-  const topics: TopicScore[] = [];
 
   const greetingName = currentUser?.name?.trim() || (currentUser?.email ? currentUser.email.split("@")[0] : "");
 
@@ -289,12 +279,12 @@ export default function OverviewPage(): React.ReactElement {
           />
         </GetStartedBar>
 
-        {/* Overview header — the range toggle lives in the Balance card now, since
-            it's the only panel whose figures are actually range-scoped. */}
+        {/* Overview header — the range toggle lives in the Token Usage card,
+            the only panel whose figures are actually range-scoped. */}
         <div>
           <h2 style={{ ...FONT, margin: 0, fontSize: 19, fontWeight: 600, color: T.text, letterSpacing: "-0.01em" }}>Overview</h2>
           <p style={{ ...FONT, margin: "5px 0 0", fontSize: 13, color: T.muted }}>
-            Balance, spend, and usage across your workspace
+            Memory, usage, and activity across your workspace
           </p>
         </div>
 
@@ -321,14 +311,14 @@ export default function OverviewPage(): React.ReactElement {
             balanceUsd={credits.creditsRemainingUsd}
             range={range}
             onRangeChange={setRange}
-            hourlyCosts={hourlyCosts}
             onViewBreakdown={() => router.push("/analytics")}
           />
           <PerformancePanel
-            recallPct={recallPct}
-            topics={topics}
+            graphSummary={graphSummary}
+            datasets={datasets}
+            loading={dataLoading}
             onUpload={() => uploadInputRef.current?.click()}
-            onViewAnalysis={() => router.push("/memory-gap-analysis")}
+            onViewGraph={() => router.push("/knowledge-graph")}
           />
         </div>
 
