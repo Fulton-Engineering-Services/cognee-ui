@@ -1,0 +1,47 @@
+name: Build UI Image
+
+on:
+  push:
+    branches: [fulton/main]
+    paths:
+      - "cognee-frontend/**"
+      - ".github/workflows/build-image.yml"
+  workflow_dispatch: {}
+
+concurrency:
+  group: build-image-${{ github.ref }}
+  cancel-in-progress: true
+
+# Self-hosted fork build: publishes the cognee-frontend UI image to GHCR.
+# Upstream's own cognee-frontend/Dockerfile is used unchanged (runtime
+# COGNEE_BACKEND_URL, non-root, baked healthcheck) — see that file. Deployed
+# on the dell via groups/cognee/compose.cognee.yml (home-infrastructure).
+jobs:
+  build-and-push:
+    name: Build & Push
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/build-push-action@v7
+        with:
+          context: cognee-frontend
+          file: cognee-frontend/Dockerfile
+          # The deploy target (the dell PowerEdge) is amd64 only -- no
+          # multi-arch buildx matrix needed, same as cluster-control-infra.
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ghcr.io/fulton-engineering-services/cognee-ui:latest
+            ghcr.io/fulton-engineering-services/cognee-ui:${{ github.sha }}
