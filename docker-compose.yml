@@ -206,7 +206,7 @@ services:
       - cognee-network
     volumes:
       - redis_data:/data
-    command: [ "redis-server", "--appendonly", "yes" ]
+    command: ["redis-server", "--appendonly", "yes"]
 
 
   redisinsight:
