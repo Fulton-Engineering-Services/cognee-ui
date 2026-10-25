@@ -1,0 +1,11 @@
+[[refs]]
+type = "self"
+repo = "cognee-ui"
+ref = "fulton/main"
+description = "This fork's own codekeeper index (FES fork of topoteretes/cognee, branch fulton/main)."
+
+[[refs]]
+type = "upstream"
+repo = "cognee"
+ref = "HEAD"
+description = "Upstream cognee core this fork tracks; AGENTS.md and pyproject.toml mirror the topoteretes/cognee tree."
